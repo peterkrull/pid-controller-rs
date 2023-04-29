@@ -30,6 +30,7 @@ pub struct Pid<CIRC,LIMIT,WINDUP,LPFILT> {
     kd: f32,
     ts: f32,
     integral: f32,
+    integral_en: bool,
     prev_error: f32,
     circular: CIRC,
     output_limit: LIMIT,
@@ -45,6 +46,7 @@ impl Pid<NoCircular,NoOutputLimit,NoAntiWindup,NoLpFilter> {
             kd : if ideal {kd*kp} else {kd} ,
             ts,
             integral : 0.,
+            integral_en : true,
             prev_error : 0.,
             circular : NoCircular,
             output_limit : NoOutputLimit,
@@ -86,6 +88,10 @@ impl<ANYCIRC,ANYLIMIT,ANYWINDUP,ANYFILT> Pid<ANYCIRC,ANYLIMIT,ANYWINDUP,ANYFILT>
     pub fn reset_integral_to(& mut self, integral : f32) {
         self.integral = integral;
     }
+
+    pub fn enable_integral(& mut self, enable : bool) {
+        self.integral_en = enable;
+    }
 }
 
 impl <ANYCIRC,ANYLIMIT,ANYWINDUP,ANYFILT> Pid<ANYCIRC,ANYLIMIT,ANYWINDUP,ANYFILT>
@@ -107,7 +113,9 @@ where
         self.prev_error = error;
 
         // Integral gain
-        self.apply_anti_windup( self.ki * error * ts , proportional + derivative);
+        if self.integral_en {
+            self.apply_anti_windup( self.ki * error * ts , proportional + derivative);
+        }
 
         // Constrain output
         self.apply_output_limit(proportional + self.integral + derivative)
