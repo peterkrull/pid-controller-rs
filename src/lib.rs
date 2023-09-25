@@ -5,29 +5,38 @@ use core::ops::{AddAssign, SubAssign};
 
 use num_traits::float::Float;
 
-pub struct NoWrapping;
+/// The controller does not wrap
+pub struct NoWrapping; 
+/// The controller will wrap around from `min -> max` or `max -> min` gracefully
 pub struct Wrapping<F> {
-    pub min: F,
-    pub max: F,
+    min: F,
+    max: F,
 }
 
+/// The controller has no output limit
 pub struct NoOutputLimit;
+/// The controller limits its output between `min` and `max`
 pub struct OutputLimit<F> {
-    pub min: F,
-    pub max: F,
+    min: F,
+    max: F,
 }
 
+/// The controller does not apply anti-windup to integrator
 pub struct NoAntiWindup;
+/// The controller applies an anti windup method to the integrator
 pub enum AntiWindup<F> {
     Conditional((F, F)),
 }
 
+/// The error is now low-pass filtered for the derivative controller
 pub struct NoLpFilter;
+/// The error is low-pass filtered with time constant `tau` for the derivative controller
 pub struct LpFilter<F> {
     tau: F,
     signal: F,
 }
 
+/// Pid controller implementation
 pub struct Pid<F, WRAP, LIMIT, WINDUP, LPFILT> {
     kp: F,
     ki: F,
@@ -43,6 +52,15 @@ pub struct Pid<F, WRAP, LIMIT, WINDUP, LPFILT> {
 }
 
 impl<F: Float + Default> Pid<F, NoWrapping, NoOutputLimit, NoAntiWindup, NoLpFilter> {
+    /// ## PID controller
+    /// 
+    /// Construct a new PID controller
+    /// 
+    /// - `kp`: Proportional gain
+    /// - `ki`: Integral gain
+    /// - `kd`: Derivative gain
+    /// - `ideal`: Controller on form `kp * ( 1 + ki/s + kd*s )`
+    /// - `ts`: Sample time the controller is expected to run at
     pub fn new(
         kp: F,
         ki: F,
@@ -55,9 +73,9 @@ impl<F: Float + Default> Pid<F, NoWrapping, NoOutputLimit, NoAntiWindup, NoLpFil
             ki: if ideal { ki * kp } else { ki },
             kd: if ideal { kd * kp } else { kd },
             ts,
-            integral: Default::default(),
+            integral: F::zero(),
             integral_en: true,
-            prev_error: Default::default(),
+            prev_error: F::zero(),
             wrapping: NoWrapping,
             output_limit: NoOutputLimit,
             anti_windup: NoAntiWindup,
@@ -69,59 +87,58 @@ impl<F: Float + Default> Pid<F, NoWrapping, NoOutputLimit, NoAntiWindup, NoLpFil
 impl<F: Float + Default, ANYWRAP, ANYLIMIT, ANYWINDUP, ANYFILT>
     Pid<F, ANYWRAP, ANYLIMIT, ANYWINDUP, ANYFILT>
 {
+    /// Set the PID controller to handle wrapping around between two values, such as `-PI` and `PI`.
     pub fn set_wrapping(self, min: F, max: F) -> Pid<F, Wrapping<F>, ANYLIMIT, ANYWINDUP, ANYFILT> {
-        Pid {
-            wrapping: Wrapping { min, max },
-            ..self
-        }
+        assert!(min < max, "The `min` value must be less than `max`");
+        Pid { wrapping: Wrapping { min, max }, ..self }
     }
 
-    pub fn set_output_limit(
-        self,
-        output_limit: OutputLimit<F>,
-    ) -> Pid<F, ANYWRAP, OutputLimit<F>, ANYWINDUP, ANYFILT> {
-        Pid {
-            output_limit,
-            ..self
-        }
+    /// Set the PID controller to limit its output. Use this in conjunction with `.set_anti_windup(...)`.
+    pub fn set_output_limit(self, min: F, max: F) -> Pid<F, ANYWRAP, OutputLimit<F>, ANYWINDUP, ANYFILT> {
+        assert!(min < max, "The `min` value must be less than `max`");
+        Pid { output_limit: OutputLimit { min, max }, ..self }
     }
 
-    pub fn set_anti_windup(
-        self,
-        anti_windup: AntiWindup<F>,
-    ) -> Pid<F, ANYWRAP, ANYLIMIT, AntiWindup<F>, ANYFILT> {
-        Pid {
-            anti_windup,
-            ..self
+    /// Set the PID controller to use an `AntiWindup` method for the integrator.
+    pub fn set_anti_windup(self, anti_windup: AntiWindup<F>) -> Pid<F, ANYWRAP, ANYLIMIT, AntiWindup<F>, ANYFILT> {
+        match anti_windup {
+            AntiWindup::Conditional((min,max)) => assert!(min < max, "The `min` value must be less than `max`")
         }
+        Pid { anti_windup, ..self }
     }
 
+    /// Set the PID controller to use a low-pass filter for the derivative term.
     pub fn set_lp_filter(self, tau: F) -> Pid<F, ANYWRAP, ANYLIMIT, ANYWINDUP, LpFilter<F>> {
-        Pid {
-            lp_filter: LpFilter {
-                tau,
-                signal: Default::default(),
-            },
-            ..self
-        }
+        assert!(tau > F::zero(), "The time constant `tau` must be strictly positive");
+        Pid { lp_filter: LpFilter { tau, signal: Default::default() }, ..self }
     }
 
+    /// Change the gains of the individual controllers.
     pub fn set_gains(&mut self, kp: F, ki: F, kd: F) {
         self.kp = kp;
         self.ki = ki;
         self.kd = kd;
     }
 
+    /// Reset the integral to `0.0`.
     pub fn reset_integral(&mut self) {
         self.integral = Default::default();
     }
 
+    /// Reset the integral to a specific value.
     pub fn reset_integral_to(&mut self, integral: F) {
         self.integral = integral;
     }
 
+    /// Enables/disables the integral.
     pub fn enable_integral(&mut self, enable: bool) {
         self.integral_en = enable;
+    }
+
+    /// Enables/disables integrator, and resets integral to `0.0` on disable.
+    pub fn enable_reset_integral(&mut self, enable: bool) {
+        self.enable_integral(enable);
+        self.reset_integral();
     }
 }
 
@@ -130,6 +147,7 @@ where
     Pid<F, ANYWRAP, ANYLIMIT, ANYWINDUP, ANYFILT>:
         WrappingTrait<F> + OutputLimitTrait<F> + AntiWindupTrait<F> + LpFilterTrait<F>,
 {
+    /// Update the controller with an `error` value using a specified sampling time `ts`.
     pub fn update_ts(&mut self, mut error: F, ts: F) -> F {
         // Constrain input
         self.apply_wrapping(&mut error);
@@ -151,6 +169,7 @@ where
         self.apply_output_limit(proportional + self.integral + derivative)
     }
 
+    /// Update the controller with an `error` value.
     pub fn update(&mut self, error: F) -> F {
         self.update_ts(error, self.ts)
     }
